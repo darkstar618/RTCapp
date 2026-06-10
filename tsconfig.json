@@ -8,6 +8,9 @@
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "@yourplatform/sdk": [
+        "./packages/sdk/src/index.ts"
       ]
     }
   },

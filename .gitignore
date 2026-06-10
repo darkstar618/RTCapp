@@ -41,3 +41,24 @@ example
 # generated native folders
 /ios
 /android
+
+# Env secrets
+.env
+.env.*
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Server data folders
+server/auth/data/
+server/api/data/
+
+# Node
+node_modules/
+
+debug.keystore
+server/api/src/config.js
+server/auth/data/
+server/api/data/

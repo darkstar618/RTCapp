@@ -3,6 +3,12 @@ const path = require("path");
 
 const config = getDefaultConfig(__dirname);
 
+config.watchFolders = [path.resolve(__dirname, 'packages')];
+
+config.resolver.blockList = [
+  new RegExp(`${path.resolve(__dirname, 'server').replace(/\\/g, '\\\\')}.*`),
+];
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (platform === "web") {
     if (moduleName === "react-native-agora") {
