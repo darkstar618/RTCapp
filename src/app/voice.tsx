@@ -1,15 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Dimensions, FlatList,
+  View, Text, TouchableOpacity, StyleSheet, FlatList,
   TextInput, KeyboardAvoidingView, Platform, ActivityIndicator,
   AppState, AppStateStatus,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import {
-  Room, RoomEvent, Track, ConnectionState, RemoteParticipant,
-} from 'livekit-client';
-import { VideoView } from '@livekit/react-native';
+import { Room, RoomEvent, ConnectionState, RemoteParticipant } from 'livekit-client';
 import { AUTH_URL, RTC_URL } from '../config';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -22,16 +19,9 @@ interface ChatMessage {
   mine: boolean;
 }
 
-interface RemoteTrack {
-  track: Track;
-  participant: string;
-}
-
 type Status = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const { width } = Dimensions.get('window');
 
 function msgId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -42,7 +32,7 @@ function fmt(ts: number) {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export default function VideoScreen() {
+export default function VoiceScreen() {
   const { channel, identity, token } = useLocalSearchParams<{
     channel: string;
     identity: string;
@@ -59,9 +49,6 @@ export default function VideoScreen() {
   const [status, setStatus] = useState<Status>('idle');
   const [remoteUids, setRemoteUids] = useState<string[]>([]);
   const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOn, setIsCameraOn] = useState(false);
-  const [localTrack, setLocalTrack] = useState<Track | null>(null);
-  const [remoteTracks, setRemoteTracks] = useState<RemoteTrack[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -102,9 +89,6 @@ export default function VideoScreen() {
 
     setStatus('connecting');
     setErrorMsg('');
-    setLocalTrack(null);
-    setRemoteTracks([]);
-    setRemoteUids([]);
 
     try {
       // Create channel
@@ -145,30 +129,6 @@ export default function VideoScreen() {
       room.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
         if (isMountedRef.current) {
           setRemoteUids(prev => prev.filter(u => u !== p.identity));
-          setRemoteTracks(prev => prev.filter(t => t.participant !== p.identity));
-        }
-      });
-      room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
-        if (track.kind === Track.Kind.Video && isMountedRef.current) {
-          setRemoteTracks(prev => [
-            ...prev.filter(t => t.participant !== participant.identity),
-            { track, participant: participant.identity },
-          ]);
-        }
-      });
-      room.on(RoomEvent.TrackUnsubscribed, (track) => {
-        if (isMountedRef.current) {
-          setRemoteTracks(prev => prev.filter(t => t.track !== track));
-        }
-      });
-      room.on(RoomEvent.LocalTrackPublished, (pub) => {
-        if (pub.track?.kind === Track.Kind.Video && isMountedRef.current) {
-          setLocalTrack(pub.track);
-        }
-      });
-      room.on(RoomEvent.LocalTrackUnpublished, (pub) => {
-        if (pub.track?.kind === Track.Kind.Video && isMountedRef.current) {
-          setLocalTrack(null);
         }
       });
       room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
@@ -205,6 +165,7 @@ export default function VideoScreen() {
             if (!msg.text || !isMountedRef.current) return;
 
             setMessages(prev => [...prev, msg]);
+            // Increment unread only when chat panel is closed
             setChatOpen(prev => {
               if (!prev) setUnread(u => u + 1);
               return prev;
@@ -217,15 +178,11 @@ export default function VideoScreen() {
 
       await room.connect(livekitUrl, livekitToken);
       await room.localParticipant.setMicrophoneEnabled(true);
-      await room.localParticipant.setCameraEnabled(true);
 
-      if (isMountedRef.current) {
-        setIsCameraOn(true);
-        setStatus('connected');
-      }
+      if (isMountedRef.current) setStatus('connected');
     } catch (e: any) {
       if (!isMountedRef.current) return;
-      console.error('[video] connect error:', e.message);
+      console.error('[voice] connect error:', e.message);
       setStatus('error');
       setErrorMsg(e.message ?? 'Connection failed');
     }
@@ -243,11 +200,6 @@ export default function VideoScreen() {
       roomRef.current = null;
     }
 
-    if (isMountedRef.current) {
-      setLocalTrack(null);
-      setRemoteTracks([]);
-    }
-
     const chId = channelIdRef.current;
     if (chId && token) {
       channelIdRef.current = null;
@@ -261,7 +213,7 @@ export default function VideoScreen() {
           headers: { Authorization: `Bearer ${token}` },
         });
       } catch {
-        // Best-effort cleanup
+        // Best-effort cleanup; server can expire the channel TTL
       }
     }
   }, [identity, token]);
@@ -273,17 +225,6 @@ export default function VideoScreen() {
     const enabled = room.localParticipant.isMicrophoneEnabled;
     await room.localParticipant.setMicrophoneEnabled(!enabled);
     if (isMountedRef.current) setIsMuted(enabled);
-  }, []);
-
-  const toggleCamera = useCallback(async () => {
-    const room = roomRef.current;
-    if (!room) return;
-    const enabled = room.localParticipant.isCameraEnabled;
-    await room.localParticipant.setCameraEnabled(!enabled);
-    if (isMountedRef.current) {
-      setIsCameraOn(!enabled);
-      if (enabled) setLocalTrack(null);
-    }
   }, []);
 
   const handleLeave = useCallback(async () => {
@@ -318,13 +259,18 @@ export default function VideoScreen() {
         { reliable: true },
       );
     } catch (e: any) {
-      console.error('[video] chat send error:', e.message);
+      console.error('[voice] chat send error:', e.message);
       setMessages(prev => prev.filter(m => m.id !== optimistic.id));
       setChatText(t);
     } finally {
       setIsSending(false);
     }
   }, [chatText, identity, isSending]);
+
+  const openChat = useCallback(() => {
+    setChatOpen(true);
+    setUnread(0);
+  }, []);
 
   useEffect(() => {
     if (chatOpen && messages.length > 0) {
@@ -333,14 +279,15 @@ export default function VideoScreen() {
   }, [messages, chatOpen]);
 
   // ── Render helpers ───────────────────────────────────────────────────────
-  const tileSize = (width - 24) / 2;
   const statusColor =
     status === 'connected'
       ? '#4ade80'
       : status === 'reconnecting' || status === 'connecting'
       ? '#fbbf24'
       : '#f87171';
-  const statusLabel = status === 'reconnecting' ? 'Reconnecting…' : status;
+
+  const statusLabel =
+    status === 'reconnecting' ? 'Reconnecting…' : status;
 
   // ── Chat panel ───────────────────────────────────────────────────────────
   if (chatOpen) {
@@ -381,7 +328,9 @@ export default function VideoScreen() {
                 >
                   {item.text}
                 </Text>
-                <Text style={[s.bubbleTime, item.mine ? s.bubbleTimeMine : s.bubbleTimeTheirs]}>
+                <Text
+                  style={[s.bubbleTime, item.mine ? s.bubbleTimeMine : s.bubbleTimeTheirs]}
+                >
                   {fmt(item.time)}
                 </Text>
               </View>
@@ -417,21 +366,20 @@ export default function VideoScreen() {
     );
   }
 
-  // ── Main video panel ─────────────────────────────────────────────────────
+  // ── Main voice panel ─────────────────────────────────────────────────────
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.header}>
-        <Text style={s.title}>Video Call</Text>
+        <Text style={s.title}>Voice Call</Text>
         <Text style={s.sub} numberOfLines={1}>{channel}</Text>
       </View>
 
       <View style={s.statusRow}>
         <View style={[s.dot, { backgroundColor: statusColor }]} />
         <Text style={s.statusText}>{statusLabel}</Text>
-        <Text style={s.participants}> · {remoteUids.length + 1} in call</Text>
-        {(status === 'connecting' || status === 'reconnecting') && (
+        {status === 'connecting' || status === 'reconnecting' ? (
           <ActivityIndicator color={statusColor} size="small" style={{ marginLeft: 4 }} />
-        )}
+        ) : null}
       </View>
 
       {status === 'error' && errorMsg ? (
@@ -443,70 +391,45 @@ export default function VideoScreen() {
         </View>
       ) : null}
 
-      {/* Video grid */}
-      <View style={s.grid}>
-        {/* Local tile */}
-        <View style={[s.tile, { width: tileSize, height: tileSize * 1.3 }]}>
-          {localTrack && isCameraOn ? (
-            <VideoView style={s.video} videoTrack={localTrack as any} mirror />
-          ) : (
-            <View style={s.placeholder}>
-              <Text style={s.tileName} numberOfLines={1}>{identity} (you)</Text>
-              <Text style={s.tileState}>{isCameraOn ? 'Starting…' : 'Camera Off'}</Text>
-            </View>
-          )}
-          <View style={s.nameTag}>
-            <Text style={s.nameTagText} numberOfLines={1}>You</Text>
-          </View>
+      <View style={s.youCard}>
+        <View style={s.avatar}>
+          <Text style={s.avatarText}>{String(identity).slice(0, 2).toUpperCase()}</Text>
         </View>
-
-        {/* Remote video tiles */}
-        {remoteTracks.map((rt, i) => (
-          <View key={`vt-${i}`} style={[s.tile, { width: tileSize, height: tileSize * 1.3 }]}>
-            <VideoView style={s.video} videoTrack={rt.track as any} />
-            <View style={s.nameTag}>
-              <Text style={s.nameTagText} numberOfLines={1}>{rt.participant}</Text>
-            </View>
-          </View>
-        ))}
-
-        {/* Remote audio-only tiles */}
-        {remoteUids
-          .filter(uid => !remoteTracks.find(rt => rt.participant === uid))
-          .map(uid => (
-            <View key={`ao-${uid}`} style={[s.tile, { width: tileSize, height: tileSize * 1.3 }]}>
-              <View style={s.placeholder}>
-                <View style={s.audioAvatar}>
-                  <Text style={s.audioAvatarText}>{uid.slice(0, 2).toUpperCase()}</Text>
-                </View>
-                <Text style={s.tileName} numberOfLines={1}>{uid}</Text>
-                <Text style={s.tileState}>Audio only</Text>
-              </View>
-            </View>
-          ))}
-
-        {/* Waiting tile */}
-        {remoteUids.length === 0 && (
-          <View style={[s.tile, s.emptyTile, { width: tileSize, height: tileSize * 1.3 }]}>
-            <Text style={s.tileName}>Waiting…</Text>
-            <Text style={s.tileState}>Share your link to invite</Text>
-          </View>
-        )}
+        <Text style={s.name} numberOfLines={1}>{identity} (you)</Text>
+        <Text style={s.muteState}>{isMuted ? 'Muted' : 'Speaking'}</Text>
       </View>
 
-      {/* Controls */}
+      <Text style={s.sectionLabel}>
+        Participants ({remoteUids.length + 1})
+      </Text>
+
+      {remoteUids.length === 0 ? (
+        <Text style={s.emptyList}>Waiting for others to join…</Text>
+      ) : (
+        <FlatList
+          data={remoteUids}
+          keyExtractor={item => item}
+          style={s.remoteList}
+          renderItem={({ item }) => (
+            <View style={s.remoteCard}>
+              <View style={s.remoteAvatar}>
+                <Text style={s.avatarText}>{item.slice(0, 2).toUpperCase()}</Text>
+              </View>
+              <Text style={s.remoteName} numberOfLines={1}>{item}</Text>
+              <View style={[s.dot, { backgroundColor: '#4ade80' }]} />
+            </View>
+          )}
+        />
+      )}
+
       <View style={s.controls}>
-        <TouchableOpacity style={[s.ctrl, isMuted && s.ctrlMuted]} onPress={toggleMute}>
+        <TouchableOpacity style={[s.ctrl, isMuted && s.ctrlActive]} onPress={toggleMute}>
           <Text style={s.ctrlLabel}>{isMuted ? 'Unmute' : 'Mute'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.ctrl, !isCameraOn && s.ctrlMuted]} onPress={toggleCamera}>
-          <Text style={s.ctrlLabel}>{isCameraOn ? 'Cam On' : 'Cam Off'}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.ctrl, s.ctrlChat]}
-          onPress={() => { setChatOpen(true); setUnread(0); }}
-        >
-          <Text style={s.ctrlLabel}>Chat{unread > 0 ? ` (${unread})` : ''}</Text>
+        <TouchableOpacity style={[s.ctrl, s.ctrlChat]} onPress={openChat}>
+          <Text style={s.ctrlLabel}>
+            Chat{unread > 0 ? ` (${unread})` : ''}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.ctrl, s.ctrlEnd]} onPress={handleLeave}>
           <Text style={s.ctrlLabel}>Leave</Text>
@@ -521,20 +444,19 @@ export default function VideoScreen() {
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#0a0a0f' },
 
-  header: { alignItems: 'center', paddingTop: 16, marginBottom: 8 },
-  title: { fontSize: 20, fontWeight: '700', color: '#e2e8f0' },
-  sub: { fontSize: 12, color: '#06b6d4', marginTop: 2 },
+  header: { alignItems: 'center', paddingTop: 24, marginBottom: 16 },
+  title: { fontSize: 22, fontWeight: '700', color: '#e2e8f0' },
+  sub: { fontSize: 13, color: '#7c6af7', marginTop: 4 },
 
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginBottom: 12,
+    marginBottom: 24,
   },
   dot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 13, color: '#94a3b8' },
-  participants: { fontSize: 13, color: '#475569' },
 
   errorBanner: {
     flexDirection: 'row',
@@ -542,9 +464,9 @@ const s = StyleSheet.create({
     backgroundColor: '#450a0a',
     paddingHorizontal: 16,
     paddingVertical: 8,
-    marginHorizontal: 8,
+    marginHorizontal: 24,
     borderRadius: 8,
-    marginBottom: 8,
+    marginBottom: 16,
     gap: 12,
   },
   errorText: { flex: 1, color: '#f87171', fontSize: 12 },
@@ -556,74 +478,81 @@ const s = StyleSheet.create({
   },
   retryText: { color: '#fff', fontSize: 12, fontWeight: '600' },
 
-  grid: {
-    flex: 1,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    padding: 8,
-    gap: 8,
-    alignContent: 'flex-start',
-  },
-  tile: {
-    borderRadius: 12,
-    overflow: 'hidden',
+  youCard: {
     backgroundColor: '#1a1d27',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    marginHorizontal: 24,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#7c6af7',
+  },
+  avatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#7c6af7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  avatarText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  name: { color: '#e2e8f0', fontSize: 15, fontWeight: '600', maxWidth: '80%' },
+  muteState: { color: '#94a3b8', fontSize: 12, marginTop: 4 },
+
+  sectionLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    textTransform: 'uppercase',
+    paddingHorizontal: 24,
+    marginBottom: 12,
+    letterSpacing: 0.5,
+  },
+  emptyList: { color: '#475569', textAlign: 'center', padding: 24 },
+  remoteList: { flex: 1, marginBottom: 8 },
+  remoteCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1a1d27',
+    borderRadius: 12,
+    padding: 14,
+    marginHorizontal: 24,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: '#2d3148',
-    position: 'relative',
+    gap: 12,
   },
-  video: { flex: 1 },
-  placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6 },
-  emptyTile: { alignItems: 'center', justifyContent: 'center', borderStyle: 'dashed' },
-  audioAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  remoteAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#2d3148',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
   },
-  audioAvatarText: { color: '#94a3b8', fontSize: 16, fontWeight: '700' },
-  tileName: {
-    color: '#94a3b8',
-    fontSize: 13,
-    fontWeight: '600',
-    maxWidth: '80%',
-    textAlign: 'center',
-  },
-  tileState: { color: '#475569', fontSize: 11 },
-  nameTag: {
-    position: 'absolute',
-    bottom: 8,
-    left: 8,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  nameTagText: { color: '#fff', fontSize: 11 },
+  remoteName: { flex: 1, color: '#e2e8f0', fontSize: 14 },
 
   controls: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 8,
-    padding: 10,
+    gap: 10,
+    padding: 24,
     flexWrap: 'wrap',
   },
   ctrl: {
     backgroundColor: '#1a1d27',
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 16,
+    padding: 14,
     alignItems: 'center',
-    minWidth: 76,
+    minWidth: 90,
     borderWidth: 1,
     borderColor: '#2d3148',
   },
-  ctrlMuted: { backgroundColor: '#1a2a3a', borderColor: '#06b6d4' },
-  ctrlChat: { borderColor: '#7c6af7' },
+  ctrlActive: { backgroundColor: '#2d1a4a', borderColor: '#7c6af7' },
+  ctrlChat: { borderColor: '#06b6d4' },
   ctrlEnd: { backgroundColor: '#450a0a', borderColor: '#f87171' },
-  ctrlLabel: { color: '#e2e8f0', fontSize: 12, fontWeight: '600' },
+  ctrlLabel: { color: '#e2e8f0', fontSize: 13, fontWeight: '600' },
 
   // Chat panel
   chatHeader: {

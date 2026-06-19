@@ -2,10 +2,18 @@ const router = require('express').Router();
 const authenticate = require('../middleware/auth');
 const rateLimit = require('../middleware/rateLimit');
 const store = require('../store/channels');
+const { fire } = require('../services/webhooks');
+const db = require('../db/database');
 
 router.post('/', authenticate, rateLimit, (req, res) => {
-  const ch = store.createChannel(req.sdk.app_id);
-  res.status(201).json(store.serializeChannel(ch));
+  try {
+    const ch = db.transaction(() => store.createChannel(req.sdk.app_id))();
+    fire(req.sdk.app_id, 'channel.created', { channel_id: ch.id });
+    res.status(201).json(store.serializeChannel(ch));
+  } catch(e) {
+    console.error('[channels] create error:', e.message);
+    res.status(500).json({ error: 'Failed to create channel' });
+  }
 });
 
 router.get('/:id', authenticate, rateLimit, (req, res) => {
@@ -20,7 +28,19 @@ router.delete('/:id', authenticate, rateLimit, (req, res) => {
   if (!ch) return res.status(404).json({ error: 'Channel not found' });
   if (ch.app_id !== req.sdk.app_id) return res.status(403).json({ error: 'Forbidden' });
   store.closeChannel(req.params.id);
+  fire(req.sdk.app_id, 'channel.closed', { channel_id: req.params.id });
   res.status(204).send();
+});
+
+router.post('/:id/participants', authenticate, rateLimit, (req, res) => {
+  const ch = store.getChannel(req.params.id);
+  if (!ch) return res.status(404).json({ error: 'Channel not found' });
+  if (ch.app_id !== req.sdk.app_id) return res.status(403).json({ error: 'Forbidden' });
+  const { identity, room } = req.body;
+  if (!identity || !room) return res.status(400).json({ error: 'identity and room required' });
+  const participant = store.addParticipant(req.params.id, identity, room, req.sdk.app_id);
+  fire(req.sdk.app_id, 'participant.joined', { channel_id: req.params.id, identity });
+  res.status(201).json(participant);
 });
 
 router.get('/:id/participants', authenticate, rateLimit, (req, res) => {
@@ -36,6 +56,7 @@ router.delete('/:id/participants/:uid', authenticate, rateLimit, (req, res) => {
   if (ch.app_id !== req.sdk.app_id) return res.status(403).json({ error: 'Forbidden' });
   const result = store.removeParticipant(req.params.id, req.params.uid);
   if (!result) return res.status(404).json({ error: 'Participant not found' });
+  fire(req.sdk.app_id, 'participant.left', { channel_id: req.params.id, identity: req.params.uid });
   res.status(204).send();
 });
 

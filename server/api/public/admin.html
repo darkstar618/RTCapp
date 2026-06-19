@@ -1,0 +1,112 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>RTC Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:sans-serif;background:#0a0a0f;color:#e2e8f0}
+.topbar{background:#12121a;border-bottom:1px solid #2d3148;padding:16px 32px;display:flex;align-items:center;justify-content:space-between}
+.topbar h1{color:#f97316;font-size:18px}
+.topbar span{font-size:12px;color:#475569}
+#login-screen{max-width:380px;margin:80px auto;background:#12121a;border:1px solid #2d3148;border-radius:12px;padding:32px}
+#login-screen h2{margin-bottom:24px;font-size:18px}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:11px;color:#94a3b8;margin-bottom:6px;text-transform:uppercase}
+.field input{width:100%;background:#0a0a0f;border:1px solid #2d3148;border-radius:8px;padding:10px 14px;color:#e2e8f0;font-size:14px;outline:none}
+.btn{width:100%;background:#f97316;color:white;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;margin-top:8px}
+#err{color:#f87171;font-size:13px;margin-top:12px;display:none}
+#panel{display:none;padding:32px;max-width:1200px;margin:0 auto}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px}
+.stat-card{background:#12121a;border:1px solid #2d3148;border-radius:12px;padding:20px}
+.label{font-size:11px;color:#64748b;text-transform:uppercase;margin-bottom:8px}
+.value{font-size:28px;font-weight:700;color:#f97316}
+.section{background:#12121a;border:1px solid #2d3148;border-radius:12px;padding:24px;margin-bottom:24px}
+.section h2{font-size:14px;font-weight:600;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}
+.rbtn{font-size:12px;background:#1e2235;border:none;color:#94a3b8;padding:4px 12px;border-radius:6px;cursor:pointer}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 12px;color:#64748b;border-bottom:1px solid #2d3148;font-size:11px;text-transform:uppercase}
+td{padding:10px 12px;border-bottom:1px solid #1a1a2e;color:#cbd5e1}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.paid{background:#14532d;color:#4ade80}
+.draft{background:#1e1e2e;color:#94a3b8}
+.void{background:#450a0a;color:#f87171}
+.abtn{background:#1e3a5f;border:none;color:#60a5fa;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px}
+.empty{color:#475569;text-align:center;padding:24px}
+</style></head><body>
+<div class="topbar"><h1>RTC Admin Panel</h1><span id="admin-status">Not logged in</span></div>
+<div id="login-screen">
+  <h2>Admin Login</h2>
+  <div class="field"><label>Admin Secret Key</label><input id="inp-key" type="password" placeholder="admin-secret-..."></div>
+  <button class="btn" onclick="login()">Login</button>
+  <div id="err"></div>
+</div>
+<div id="panel">
+  <div class="stats-grid">
+    <div class="stat-card"><div class="label">Total Apps</div><div class="value" id="s-apps">-</div></div>
+    <div class="stat-card"><div class="label">Total Channels</div><div class="value" id="s-channels">-</div></div>
+    <div class="stat-card"><div class="label">Total Minutes</div><div class="value" id="s-minutes">-</div></div>
+    <div class="stat-card"><div class="label">Total Revenue</div><div class="value" id="s-revenue">-</div></div>
+  </div>
+  <div class="section">
+    <h2>Apps <button class="rbtn" onclick="load()">Refresh</button></h2>
+    <table><thead><tr><th>App ID</th><th>Plan</th><th>Channels</th><th>Sessions</th><th>Minutes</th><th>Action</th></tr></thead>
+    <tbody id="apps-table"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody></table>
+  </div>
+  <div class="section">
+    <h2>Invoices <button class="rbtn" onclick="load()">Refresh</button></h2>
+    <table><thead><tr><th>Invoice ID</th><th>App ID</th><th>Minutes</th><th>Total</th><th>Status</th><th>Action</th></tr></thead>
+    <tbody id="inv-table"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody></table>
+  </div>
+</div>
+<script>
+let adminKey=localStorage.getItem('admin_key');
+function login(){
+  const k=document.getElementById('inp-key').value.trim();
+  const e=document.getElementById('err');e.style.display='none';
+  if(!k){e.textContent='Key required';e.style.display='block';return;}
+  adminKey=k;localStorage.setItem('admin_key',k);showPanel();
+}
+async function load(){
+  if(!adminKey)return;
+  const h={'X-Admin-Key':adminKey};
+  try{
+    const[sR,aR,iR]=await Promise.all([
+      fetch('http://localhost:3002/v1/admin/stats',{headers:h}),
+      fetch('http://localhost:3002/v1/admin/apps',{headers:h}),
+      fetch('http://localhost:3002/v1/admin/invoices',{headers:h})
+    ]);
+    if(sR.status===401){localStorage.removeItem('admin_key');location.reload();return;}
+    const s=await sR.json();const apps=await aR.json();const invs=await iR.json();
+    document.getElementById('s-apps').textContent=s.total_apps;
+    document.getElementById('s-channels').textContent=s.total_channels;
+    document.getElementById('s-minutes').textContent=s.total_minutes;
+    document.getElementById('s-revenue').textContent='$'+s.total_revenue;
+    const at=document.getElementById('apps-table');
+    at.innerHTML=apps.length===0?'<tr><td colspan=6 class=empty>No apps yet</td></tr>':
+      apps.map(a=>{
+        return '<tr><td style="font-family:monospace;font-size:11px">'+a.app_id+'</td><td>'+a.plan+'</td><td>'+a.total_channels+'</td><td>'+a.total_sessions+'</td><td>'+a.total_minutes+'</td><td><button class="abtn" onclick="changePlan(\''+a.app_id+'\')">Change Plan</button></td></tr>';
+      }).join('');
+    const it=document.getElementById('inv-table');
+    it.innerHTML=invs.length===0?'<tr><td colspan=6 class=empty>No invoices yet</td></tr>':
+      invs.map(i=>{
+        const action=i.status==='draft'?'<button class="abtn" onclick="markPaid(\''+i.id+'\')">Mark Paid</button>':'—';
+        return '<tr><td style="font-family:monospace;font-size:11px">'+i.id+'</td><td style="font-family:monospace;font-size:10px">'+i.app_id.slice(0,16)+'...</td><td>'+i.minutes_used+'</td><td>$'+i.total_cost+'</td><td><span class="badge '+i.status+'">'+i.status+'</span></td><td>'+action+'</td></tr>';
+      }).join('');
+  }catch(e){console.error(e);}
+}
+async function changePlan(appId){
+  const plan=prompt('Enter plan (free/pro/enterprise):');
+  if(!plan)return;
+  await fetch('http://localhost:3002/v1/admin/apps/'+appId+'/plan',{method:'PATCH',headers:{'X-Admin-Key':adminKey,'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan})});
+  load();
+}
+async function markPaid(invId){
+  await fetch('http://localhost:3002/v1/admin/invoices/'+invId,{method:'PATCH',headers:{'X-Admin-Key':adminKey,'Content-Type':'application/json'},body:JSON.stringify({status:'paid'})});
+  load();
+}
+function showPanel(){
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('panel').style.display='block';
+  document.getElementById('admin-status').textContent='Admin';
+  load();setInterval(load,20000);
+}
+if(adminKey)showPanel();
+</script>
+</body></html>

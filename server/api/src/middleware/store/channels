@@ -1,0 +1,48 @@
+const { v4: uuidv4 } = require('uuid');
+
+// channelId → { id, appId, createdAt, closedAt, participants: Map<uid, {joinedAt}> }
+const channels = new Map();
+
+function createChannel(appId) {
+  const id = `ch_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+  channels.set(id, { id, appId, createdAt: Date.now(), closedAt: null, participants: new Map() });
+  return channels.get(id);
+}
+
+function getChannel(id) {
+  return channels.get(id) || null;
+}
+
+function closeChannel(id) {
+  const ch = channels.get(id);
+  if (!ch) return null;
+  ch.closedAt = Date.now();
+  return ch;
+}
+
+function addParticipant(channelId, uid) {
+  const ch = channels.get(channelId);
+  if (!ch) return null;
+  ch.participants.set(uid, { uid, joinedAt: Date.now() });
+  return ch;
+}
+
+function removeParticipant(channelId, uid) {
+  const ch = channels.get(channelId);
+  if (!ch || !ch.participants.has(uid)) return null;
+  ch.participants.delete(uid);
+  return ch;
+}
+
+function serializeChannel(ch) {
+  return {
+    id: ch.id,
+    app_id: ch.appId,
+    created_at: ch.createdAt,
+    closed_at: ch.closedAt,
+    participant_count: ch.participants.size,
+    participants: [...ch.participants.values()],
+  };
+}
+
+module.exports = { createChannel, getChannel, closeChannel, addParticipant, removeParticipant, serializeChannel };

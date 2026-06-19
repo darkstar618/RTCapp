@@ -62,3 +62,7 @@ debug.keystore
 server/api/src/config.js
 server/auth/data/
 server/api/data/
+node_modules/
+android/build/
+android/app/build/
+*.zip
