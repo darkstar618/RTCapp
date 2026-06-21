@@ -12,7 +12,7 @@ Android-only real-time communication SDK built on LiveKit.
 npm install @yourplatform/sdk @livekit/react-native @livekit/react-native-webrtc
 ```
 
-Add to ndroid/build.gradle:
+Add to `android/build.gradle`:
 
 ```gradle
 allprojects { repositories { maven { url 'https://jitpack.io' } } }
@@ -20,29 +20,47 @@ allprojects { repositories { maven { url 'https://jitpack.io' } } }
 
 ---
 
-## Quick Start
+## Authentication (production pattern)
 
-### 1. Get an SDK token from your backend
+**Never call `/sdk/token` with `app_secret` from the mobile app.** Use a backend-for-frontend:
 
 ```js
-const res = await fetch('https://your-api.com/sdk/token', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET })
+// Your backend (Node, Python, etc.)
+app.post('/api/rtc/token', authenticateUser, async (req, res) => {
+  const response = await fetch(`${AUTH_SERVER}/sdk/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      app_id: process.env.APP_ID,
+      app_secret: process.env.APP_SECRET, // server-side only
+    }),
+  });
+  const tokens = await response.json();
+  res.json({ access_token: tokens.access_token });
 });
-const { access_token } = await res.json();
 ```
 
-### 2. Use the React hook
+```tsx
+// Mobile app — only receives short-lived token from YOUR backend
+const { access_token } = await fetch('https://your-api.com/api/rtc/token', {
+  headers: { Authorization: `Bearer ${userSessionToken}` },
+}).then(r => r.json());
+```
+
+For local emulator testing only, `TokenManager` in `server/auth/sdk-additions/` can exchange credentials when `EXPO_PUBLIC_AUTH_URL` is set — still not for production APKs.
+
+---
+
+## Quick Start
 
 ```tsx
 import { useRtcClient } from '@yourplatform/sdk';
 
 export default function VoiceCallScreen() {
   const { isJoined, isMuted, remoteUids, error, join, leave, toggleAudio } = useRtcClient({
-    authServerUrl: 'https://your-api.com',
+    authServerUrl: 'https://auth.your-domain.com',
     appId: 'ap_xxxxxx',
-    sdkToken: 'token-from-your-backend',
+    sdkToken: accessTokenFromYourBackend,
     mode: 'audio',
   });
 
@@ -59,31 +77,6 @@ export default function VoiceCallScreen() {
 
 ---
 
-## API Reference
-
-### RtcClient.create(config)
-
-| Option | Type | Required | Description |
-|---|---|---|---|
-| authServerUrl | string | Yes | Base URL of your platform API |
-| appId | string | Yes | Your app_id from dashboard |
-| sdkToken | string | Yes | Short-lived JWT from your backend |
-| mode | 'audio' or 'video' | No | Defaults to audio |
-
-### Events
-
-```ts
-client.on('join', (session) => {})
-client.on('leave', (channelId) => {})
-client.on('remoteUserJoined', (uid) => {})
-client.on('remoteUserLeft', (uid) => {})
-client.on('activeSpeakersChanged', (uids) => {})
-client.on('connectionStateChanged', (state) => {})
-client.on('error', (err) => {})
-```
-
----
-
 ## Error Handling
 
 ```ts
@@ -93,11 +86,11 @@ try {
   await client.join('my-channel');
 } catch (err) {
   if (err instanceof RtcPermissionError) {
-    // Show permission settings prompt
+    // Prompt user to grant microphone permission
   } else if (err instanceof RtcTokenError) {
-    // Refresh SDK token and retry
+    // Refresh SDK token from your backend and retry
   } else if (err instanceof RtcConnectionError) {
-    // Check internet connection
+    // Check network / LiveKit status
   }
 }
 ```
@@ -106,14 +99,14 @@ try {
 
 ## Android Permissions
 
-Add to AndroidManifest.xml:
-
 ```xml
-<uses-permission android:name='android.permission.RECORD_AUDIO' />
-<uses-permission android:name='android.permission.CAMERA' />
-<uses-permission android:name='android.permission.INTERNET' />
-<uses-permission android:name='android.permission.MODIFY_AUDIO_SETTINGS' />
+<uses-permission android:name="android.permission.RECORD_AUDIO" />
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 ```
+
+Set `android:allowBackup="false"` in production manifests.
 
 ---
 
@@ -135,7 +128,7 @@ Add to AndroidManifest.xml:
 | React Native | 0.73+ |
 | Expo SDK | 56+ |
 | Android API | 24+ |
-| Node.js | 18+ |
+| Node.js | 20+ |
 
 ---
 

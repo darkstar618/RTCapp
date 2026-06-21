@@ -1,7 +1,7 @@
 {
   "name": "yourplatform-auth-service",
   "version": "0.1.0",
-  "description": "Week 3-4: Auth service — API keys + JWT token generation",
+  "description": "Auth service — API keys + JWT token generation",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -11,14 +11,14 @@
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
-    "expo": "~56.0.8",
     "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.2",
     "knex": "^3.1.0",
     "livekit-server-sdk": "^2.15.4",
-    "react": "19.2.3",
-    "react-native": "0.85.3",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
     "sqlite3": "^5.1.7",
     "uuid": "^9.0.0"
   },

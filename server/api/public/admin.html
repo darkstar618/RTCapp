@@ -66,11 +66,12 @@ function login(){
 async function load(){
   if(!adminKey)return;
   const h={'X-Admin-Key':adminKey};
+  const base=window.location.origin;
   try{
     const[sR,aR,iR]=await Promise.all([
-      fetch('http://localhost:3002/v1/admin/stats',{headers:h}),
-      fetch('http://localhost:3002/v1/admin/apps',{headers:h}),
-      fetch('http://localhost:3002/v1/admin/invoices',{headers:h})
+      fetch(base+'/v1/admin/stats',{headers:h}),
+      fetch(base+'/v1/admin/apps',{headers:h}),
+      fetch(base+'/v1/admin/invoices',{headers:h})
     ]);
     if(sR.status===401){localStorage.removeItem('admin_key');location.reload();return;}
     const s=await sR.json();const apps=await aR.json();const invs=await iR.json();
@@ -94,11 +95,11 @@ async function load(){
 async function changePlan(appId){
   const plan=prompt('Enter plan (free/pro/enterprise):');
   if(!plan)return;
-  await fetch('http://localhost:3002/v1/admin/apps/'+appId+'/plan',{method:'PATCH',headers:{'X-Admin-Key':adminKey,'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan})});
+  await fetch(window.location.origin+'/v1/admin/apps/'+appId+'/plan',{method:'PATCH',headers:{'X-Admin-Key':adminKey,'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan})});
   load();
 }
 async function markPaid(invId){
-  await fetch('http://localhost:3002/v1/admin/invoices/'+invId,{method:'PATCH',headers:{'X-Admin-Key':adminKey,'Content-Type':'application/json'},body:JSON.stringify({status:'paid'})});
+  await fetch(window.location.origin+'/v1/admin/invoices/'+invId,{method:'PATCH',headers:{'X-Admin-Key':adminKey,'Content-Type':'application/json'},body:JSON.stringify({status:'paid'})});
   load();
 }
 function showPanel(){

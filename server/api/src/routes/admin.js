@@ -1,15 +1,11 @@
 const router = require('express').Router();
 const db = require('../db/billing');
-const jwt = require('jsonwebtoken');
-const { SDK_JWT_SECRET } = require('../config');
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin-secret-change-in-prod';
-function adminAuth(req, res, next) {
-  const key = req.headers['x-admin-key'] || '';
-  if (key !== ADMIN_SECRET) return res.status(401).json({ error: 'Unauthorized' });
-  next();
-}
-// GET /v1/admin/stats — platform-wide stats
-router.get('/stats', adminAuth, (req, res) => {
+const adminAuth = require('../middleware/adminAuth');
+const { adminRateLimit } = require('../middleware/rateLimit');
+
+router.use(adminAuth, adminRateLimit);
+
+router.get('/stats', (req, res) => {
   const totalChannels = db.prepare('SELECT COUNT(*) as count FROM channels').get();
   const activeChannels = db.prepare('SELECT COUNT(*) as count FROM channels WHERE closed_at IS NULL').get();
   const totalSessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get();
@@ -24,13 +20,13 @@ router.get('/stats', adminAuth, (req, res) => {
     total_minutes: totalMinutes.total ? Math.round(totalMinutes.total / 60000) : 0,
     total_apps: totalApps.count,
     total_invoices: totalInvoices.count,
-    total_revenue: totalRevenue.total ? parseFloat(totalRevenue.total.toFixed(2)) : 0
+    total_revenue: totalRevenue.total ? parseFloat(totalRevenue.total.toFixed(2)) : 0,
   });
 });
-// GET /v1/admin/apps — all apps with usage
-router.get('/apps', adminAuth, (req, res) => {
+
+router.get('/apps', (req, res) => {
   const apps = db.prepare('SELECT DISTINCT app_id FROM channels').all();
-  const result = apps.map(a => {
+  const result = apps.map((a) => {
     const channels = db.prepare('SELECT COUNT(*) as count FROM channels WHERE app_id = ?').get(a.app_id);
     const sessions = db.prepare('SELECT COUNT(*) as count FROM sessions WHERE app_id = ?').get(a.app_id);
     const minutes = db.prepare('SELECT SUM(duration_ms) as total FROM sessions WHERE app_id = ? AND duration_ms IS NOT NULL').get(a.app_id);
@@ -40,24 +36,24 @@ router.get('/apps', adminAuth, (req, res) => {
       plan: sub ? sub.plan_id : 'free',
       total_channels: channels.count,
       total_sessions: sessions.count,
-      total_minutes: minutes.total ? Math.round(minutes.total / 60000) : 0
+      total_minutes: minutes.total ? Math.round(minutes.total / 60000) : 0,
     };
   });
   res.json(result);
 });
-// GET /v1/admin/invoices — all invoices
-router.get('/invoices', adminAuth, (req, res) => {
+
+router.get('/invoices', (req, res) => {
   res.json(db.prepare('SELECT * FROM invoices ORDER BY created_at DESC LIMIT 100').all());
 });
-// PATCH /v1/admin/invoices/:id — mark invoice paid
-router.patch('/invoices/:id', adminAuth, (req, res) => {
+
+router.patch('/invoices/:id', (req, res) => {
   const { status } = req.body;
-  if (!['draft','paid','void'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  if (!['draft', 'paid', 'void'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(status, req.params.id);
   res.json({ success: true });
 });
-// PATCH /v1/admin/apps/:appId/plan — change app plan
-router.patch('/apps/:appId/plan', adminAuth, (req, res) => {
+
+router.patch('/apps/:appId/plan', (req, res) => {
   const { plan_id } = req.body;
   const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(plan_id);
   if (!plan) return res.status(400).json({ error: 'Invalid plan' });
@@ -71,4 +67,5 @@ router.patch('/apps/:appId/plan', adminAuth, (req, res) => {
   }
   res.json({ success: true, plan });
 });
+
 module.exports = router;

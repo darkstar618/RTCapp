@@ -4,9 +4,9 @@ import {
   TextInput, KeyboardAvoidingView, Platform, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Room, RoomEvent, DataPacket_Kind } from 'livekit-client';
+import { useRouter } from 'expo-router';
 import { AUTH_URL } from '../config';
+import { useRtcSession } from '../context/rtc-session';
 
 // DM works by joining a special "dm" LiveKit room shared between two users
 // Room name = sorted identities joined with "__dm__"
@@ -23,17 +23,15 @@ interface Contact {
 }
 
 export default function MessagesScreen() {
-  const { identity, token } = useLocalSearchParams<{ identity: string; token: string }>();
+  const { session } = useRtcSession();
+  const identity = session?.identity ?? '';
+  const token = session?.token ?? '';
   const router = useRouter();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [newContact, setNewContact] = useState('');
 
   function startChat(contactIdentity: string) {
-    router.push(
-      '/chat?identity=' + encodeURIComponent(identity) +
-      '&contact=' + encodeURIComponent(contactIdentity) +
-      '&token=' + encodeURIComponent(token)
-    );
+    router.push('/chat?contact=' + encodeURIComponent(contactIdentity));
   }
 
   function addContact() {

@@ -1,11 +1,3 @@
-/**
- * db/repositories.ts
- * FIX #6, #7: .query() returns QueryObservable, NOT a Promise.
- *   Must call .query().fetch() to get Promise<Model[]>.
- *   .query().then() hangs silently — changed to .fetch().then() or await .fetch().
- * FIX #8: import models as values (not `type`) so generics work at runtime.
- */
-
 import { getDatabase } from './database';
 import type { Database } from '@nozbe/watermelondb';
 import {
@@ -15,7 +7,9 @@ import {
   ApiKeyModel,
 } from '../models';
 
-// ─── ChannelRepository ───────────────────────────────────────────────────────
+function sessionId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export class ChannelRepository {
   private db: Database;
@@ -26,15 +20,16 @@ export class ChannelRepository {
 
   async findOrCreate(channelId: string): Promise<ChannelModel> {
     const collection = this.db.collections.get<ChannelModel>('channels');
-
-    // FIX #6: was .query().then(...) — must be .query().fetch() to get a Promise
     const rows = await collection.query().fetch();
     const existing = rows.find((r) => r.channelId === channelId);
     if (existing) return existing;
 
+    const now = Date.now();
     return this.db.write(async () =>
       collection.create((record) => {
         record.channelId = channelId;
+        record.status = 'active';
+        record.createdAt = new Date(now);
       })
     );
   }
@@ -52,20 +47,12 @@ export class ChannelRepository {
   }
 }
 
-// ─── SessionRepository ───────────────────────────────────────────────────────
-
 type CreateSessionParams = {
   channelId: string;
-  uid: string;
-  startedAt: Date;
-  status: string;
-  apiKeyId: string;
+  userId: string;
+  mediaType?: string;
+  projectId?: string;
 };
-
-type UpdateSessionParams = Partial<{
-  status: string;
-  endedAt: Date;
-}>;
 
 export class SessionRepository {
   private db: Database;
@@ -76,24 +63,32 @@ export class SessionRepository {
 
   async create(params: CreateSessionParams): Promise<SessionModel> {
     const collection = this.db.collections.get<SessionModel>('sessions');
+    const now = Date.now();
     return this.db.write(async () =>
       collection.create((record) => {
+        record.sessionId = sessionId();
         record.channelId = params.channelId;
-        record.uid = params.uid;
-        record.startedAt = params.startedAt;
-        record.status = params.status;
-        record.apiKeyId = params.apiKeyId;
+        record.userId = params.userId;
+        record.projectId = params.projectId ?? null;
+        record.mediaType = params.mediaType ?? 'voice';
+        record.startedAt = new Date(now);
+        record.synced = false;
+        record.createdAt = new Date(now);
+        record.bytesSent = 0;
+        record.bytesReceived = 0;
       })
     );
   }
 
-  async update(id: string, params: UpdateSessionParams): Promise<void> {
+  async markEnded(id: string, endedAtMs: number): Promise<void> {
     const collection = this.db.collections.get<SessionModel>('sessions');
     const record = await collection.find(id);
     await this.db.write(async () =>
       record.update((r) => {
-        if (params.status !== undefined) r.status = params.status!;
-        if (params.endedAt !== undefined) r.endedAt = params.endedAt!;
+        r.endedAt = new Date(endedAtMs);
+        r.durationSeconds = Math.round(
+          (endedAtMs - r.startedAt.getTime()) / 1000
+        );
       })
     );
   }
@@ -107,13 +102,10 @@ export class SessionRepository {
   }
 
   async allForChannel(channelId: string): Promise<SessionModel[]> {
-    // FIX #7: was .query().then() — must be .query().fetch().then() or await .fetch()
     const rows = await this.db.collections.get<SessionModel>('sessions').query().fetch();
     return rows.filter((r) => r.channelId === channelId);
   }
 }
-
-// ─── ParticipantRepository ───────────────────────────────────────────────────
 
 export class ParticipantRepository {
   private db: Database;
@@ -122,13 +114,14 @@ export class ParticipantRepository {
     this.db = getDatabase();
   }
 
-  async create(channelId: string, uid: string): Promise<ParticipantModel> {
+  async create(channelId: string, userId: string): Promise<ParticipantModel> {
     const collection = this.db.collections.get<ParticipantModel>('participants');
     return this.db.write(async () =>
       collection.create((record) => {
         record.channelId = channelId;
-        record.uid = uid;
+        record.userId = userId;
         record.joinedAt = new Date();
+        record.connectionState = 'connected';
       })
     );
   }
@@ -136,25 +129,27 @@ export class ParticipantRepository {
   async markLeft(id: string): Promise<void> {
     const collection = this.db.collections.get<ParticipantModel>('participants');
     const record = await collection.find(id);
-    const now = new Date();
-    await this.db.write(async () =>
+    await this.db.write(async () => {
       record.update((r) => {
-        r.leftAt = now;
-        r.durationSeconds = Math.round(
-          (now.getTime() - r.joinedAt.getTime()) / 1000
-        );
-      })
-    );
+        r.leftAt = new Date();
+        r.connectionState = 'disconnected';
+      });
+    });
   }
 
   async allForChannel(channelId: string): Promise<ParticipantModel[]> {
-    // FIX #7: .query().fetch() not .query().then()
     const rows = await this.db.collections.get<ParticipantModel>('participants').query().fetch();
     return rows.filter((r) => r.channelId === channelId);
   }
 }
 
-// ─── ApiKeyRepository ────────────────────────────────────────────────────────
+type UpsertApiKeyParams = {
+  appId: string;
+  jwt: string;
+  refreshToken: string;
+  expiresAt: number;
+  projectId?: string;
+};
 
 export class ApiKeyRepository {
   private db: Database;
@@ -163,38 +158,48 @@ export class ApiKeyRepository {
     this.db = getDatabase();
   }
 
-  async create(keyHash: string, name: string): Promise<ApiKeyModel> {
+  async upsert(params: UpsertApiKeyParams): Promise<ApiKeyModel> {
+    const existing = await this.findByAppId(params.appId);
+    if (existing) {
+      await this.db.write(async () =>
+        existing.update((r) => {
+          r.jwtToken = params.jwt;
+          r.refreshToken = params.refreshToken;
+          r.jwtExpiresAt = params.expiresAt;
+          r.lastUsedAt = Date.now();
+        })
+      );
+      return existing;
+    }
+
     const collection = this.db.collections.get<ApiKeyModel>('api_keys');
+    const now = Date.now();
     return this.db.write(async () =>
       collection.create((record) => {
-        record.keyHash = keyHash;
-        record.name = name;
-        record.isActive = true;
+        record.appId = params.appId;
+        record.projectId = params.projectId ?? null;
+        record.jwtToken = params.jwt;
+        record.refreshToken = params.refreshToken;
+        record.jwtExpiresAt = params.expiresAt;
+        record.createdAt = new Date(now);
+        record.lastUsedAt = now;
       })
     );
   }
 
-  async findByHash(keyHash: string): Promise<ApiKeyModel | null> {
-    // Already used .fetch() correctly — no change needed
+  async findByAppId(appId: string): Promise<ApiKeyModel | null> {
     const all = await this.db.collections.get<ApiKeyModel>('api_keys').query().fetch();
-    return all.find((r) => r.keyHash === keyHash) ?? null;
+    return all.find((r) => r.appId === appId) ?? null;
   }
 
-  async updateJwt(id: string, jwt: string, refreshToken?: string): Promise<void> {
+  async updateJwt(id: string, jwt: string, refreshToken?: string, expiresAt?: number): Promise<void> {
     const record = await this.db.collections.get<ApiKeyModel>('api_keys').find(id);
     await this.db.write(async () =>
       record.update((r) => {
-        r.jwt = jwt;
+        r.jwtToken = jwt;
         if (refreshToken) r.refreshToken = refreshToken;
-      })
-    );
-  }
-
-  async deactivate(id: string): Promise<void> {
-    const record = await this.db.collections.get<ApiKeyModel>('api_keys').find(id);
-    await this.db.write(async () =>
-      record.update((r) => {
-        r.isActive = false;
+        if (expiresAt) r.jwtExpiresAt = expiresAt;
+        r.lastUsedAt = Date.now();
       })
     );
   }

@@ -4,6 +4,7 @@ const rateLimit = require('../middleware/rateLimit');
 const store = require('../store/channels');
 const { fire } = require('../services/webhooks');
 const db = require('../db/database');
+const logger = require('../utils/logger');
 
 router.post('/', authenticate, rateLimit, (req, res) => {
   try {
@@ -11,7 +12,7 @@ router.post('/', authenticate, rateLimit, (req, res) => {
     fire(req.sdk.app_id, 'channel.created', { channel_id: ch.id });
     res.status(201).json(store.serializeChannel(ch));
   } catch(e) {
-    console.error('[channels] create error:', e.message);
+    logger.error({ err: e }, 'channel create error');
     res.status(500).json({ error: 'Failed to create channel' });
   }
 });
@@ -32,12 +33,17 @@ router.delete('/:id', authenticate, rateLimit, (req, res) => {
   res.status(204).send();
 });
 
+const ROOM_IDENTITY_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
+
 router.post('/:id/participants', authenticate, rateLimit, (req, res) => {
   const ch = store.getChannel(req.params.id);
   if (!ch) return res.status(404).json({ error: 'Channel not found' });
   if (ch.app_id !== req.sdk.app_id) return res.status(403).json({ error: 'Forbidden' });
   const { identity, room } = req.body;
   if (!identity || !room) return res.status(400).json({ error: 'identity and room required' });
+  if (!ROOM_IDENTITY_PATTERN.test(String(identity)) || !ROOM_IDENTITY_PATTERN.test(String(room))) {
+    return res.status(400).json({ error: 'identity and room must be 1-128 alphanumeric characters' });
+  }
   const participant = store.addParticipant(req.params.id, identity, room, req.sdk.app_id);
   fire(req.sdk.app_id, 'participant.joined', { channel_id: req.params.id, identity });
   res.status(201).json(participant);

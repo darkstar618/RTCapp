@@ -3,7 +3,8 @@
 
 const knex = require('knex');
 const path = require('path');
-const fs   = require('fs');
+const fs = require('fs');
+const logger = require('../utils/logger');
 
 const DB_DIR  = path.join(__dirname, '../../data');
 const DB_PATH = path.join(DB_DIR, 'auth.db');
@@ -70,7 +71,7 @@ async function bootstrap() {
     });
   }
 
-  console.log('Database ready:', DB_PATH);
+  logger.info({ path: DB_PATH }, 'database ready');
 }
 
 module.exports = { db, bootstrap };

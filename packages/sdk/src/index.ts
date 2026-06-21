@@ -14,3 +14,4 @@ export { useRtcClient } from './rtc/useRtcClient';
 export type { UseRtcClientResult } from './rtc/useRtcClient';
 // -- Errors --
 export { RtcError, RtcPermissionError, RtcTokenError, RtcConnectionError } from './errors';
+export { requestAudioPermissions, requireAudioPermissions, checkAudioPermissions } from './rtc/permissions';

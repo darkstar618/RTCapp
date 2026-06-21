@@ -1,13 +1,10 @@
-// packages/sdk/src/rtc/RtcClient.ts
-// LiveKit-based RTC client — replaces react-native-agora entirely.
-// Wraps @livekit/react-native with the same public API as the old Agora client
-// so nothing in the UI needs to change.
-
+import { Platform } from 'react-native';
+import { ChannelRepository, SessionRepository } from '../db/repositories';
+import { RtcConnectionError, RtcTokenError } from '../errors';
 import {
   Room,
   RoomEvent,
   Track,
-  TrackPublication,
   RemoteParticipant,
   LocalParticipant,
   ConnectionState,
@@ -16,60 +13,45 @@ import {
   Participant,
 } from '@livekit/react-native';
 
-import { Platform } from 'react-native';
-import { getDatabase } from '../db/database';
-import { ChannelRepository, SessionRepository } from '../db/repositories';
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 export interface RtcClientConfig {
-  /** Your auth server base URL e.g. http://10.0.2.2:3001 */
   authServerUrl: string;
-  /** app_id from your platform API key */
   appId: string;
-  /** SDK JWT — get this from TokenManager first */
   sdkToken: string;
-  /** audio | video — defaults to audio */
   mode?: 'audio' | 'video';
 }
 
 export interface RtcSessionInfo {
   channelId: string;
-  uid:       string;
+  uid: string;
   startedAt: number;
 }
 
 export type RtcEventMap = {
-  join:                   (session: RtcSessionInfo) => void;
-  leave:                  (channelId: string) => void;
-  remoteUserJoined:       (uid: string) => void;
-  remoteUserLeft:         (uid: string) => void;
-  activeSpeakersChanged:  (uids: string[]) => void;
+  join: (session: RtcSessionInfo) => void;
+  leave: (channelId: string) => void;
+  remoteUserJoined: (uid: string) => void;
+  remoteUserLeft: (uid: string) => void;
+  activeSpeakersChanged: (uids: string[]) => void;
   connectionStateChanged: (state: string) => void;
-  error:                  (err: Error) => void;
+  error: (err: Error) => void;
 };
 
-// ── RtcClient ─────────────────────────────────────────────────────────────────
-
 export class RtcClient {
-  private room:       Room;
-  private config:     RtcClientConfig;
-  private session:    RtcSessionInfo | null = null;
-  private listeners:  Map<string, Set<Function>> = new Map();
-
+  private room: Room;
+  private config: RtcClientConfig;
+  private session: RtcSessionInfo | null = null;
+  private listeners: Map<string, Set<Function>> = new Map();
   private channelRepo: ChannelRepository;
   private sessionRepo: SessionRepository;
 
   private constructor(config: RtcClientConfig) {
     this.config = config;
-
-    const db = getDatabase();
-    this.channelRepo = new ChannelRepository(db);
-    this.sessionRepo = new SessionRepository(db);
+    this.channelRepo = new ChannelRepository();
+    this.sessionRepo = new SessionRepository();
 
     const options: RoomOptions = {
-      adaptiveStream:   true,
-      dynacast:         true,
+      adaptiveStream: true,
+      dynacast: true,
       audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true },
     };
 
@@ -81,101 +63,107 @@ export class RtcClient {
     this._bindRoomEvents();
   }
 
-  // ── Factory ────────────────────────────────────────────────────────────────
-
   static create(config: RtcClientConfig): RtcClient {
     if (Platform.OS !== 'android') {
-      throw new Error('RtcClient is only supported on Android');
+      throw new RtcConnectionError('RtcClient is only supported on Android');
     }
     return new RtcClient(config);
   }
 
-  // ── Join ───────────────────────────────────────────────────────────────────
-
   async join(channelId: string, identity?: string): Promise<RtcSessionInfo> {
-    // 1. Get a LiveKit token from your auth server
     const uid = identity ?? `user_${Date.now()}`;
-    const { token, url } = await this._fetchLiveKitToken(channelId, uid);
 
-    // 2. Connect to LiveKit cloud
-    await this.room.connect(url, token);
+    try {
+      const { token, url } = await this._fetchLiveKitToken(channelId, uid);
+      await this.room.connect(url, token);
+      await this.room.localParticipant.setMicrophoneEnabled(true);
 
-    // 3. Publish audio (always)
-    await this.room.localParticipant.setMicrophoneEnabled(true);
+      if (this.config.mode === 'video') {
+        await this.room.localParticipant.setCameraEnabled(true);
+      }
 
-    // 4. Publish video if in video mode
-    if (this.config.mode === 'video') {
-      await this.room.localParticipant.setCameraEnabled(true);
+      await this.channelRepo.findOrCreate(channelId);
+      const startedAt = Date.now();
+
+      await this.sessionRepo.create({
+        channelId,
+        userId: uid,
+        mediaType: this.config.mode === 'video' ? 'video' : 'voice',
+      });
+
+      this.session = { channelId, uid, startedAt };
+      this._emit('join', this.session);
+      return this.session;
+    } catch (err) {
+      const wrapped = err instanceof RtcTokenError || err instanceof RtcConnectionError
+        ? err
+        : new RtcConnectionError(err instanceof Error ? err.message : 'Failed to join channel');
+      this._emit('error', wrapped);
+      throw wrapped;
     }
-
-    // 5. Persist to WatermelonDB
-    const channel = await this.channelRepo.findOrCreate(channelId);
-    const startedAt = Date.now();
-
-    await this.sessionRepo.create({
-      channelId: channel.id,
-      uid,
-      startedAt,
-      endedAt:  null,
-      synced:   false,
-    });
-
-    this.session = { channelId, uid, startedAt };
-    this._emit('join', this.session);
-    return this.session;
   }
-
-  // ── Leave ──────────────────────────────────────────────────────────────────
 
   async leave(): Promise<void> {
     if (!this.session) return;
 
-    await this.room.disconnect();
+    try {
+      await this.room.disconnect();
 
-    // Mark session ended in WatermelonDB
-    const sessions = await this.sessionRepo.allForChannel(this.session.channelId);
-    const active   = sessions.find(s => s.uid === this.session!.uid && !s.endedAt);
-    if (active) {
-      await this.sessionRepo.markEnded(active.id, Date.now());
+      const sessions = await this.sessionRepo.allForChannel(this.session.channelId);
+      const active = sessions.find((s) => s.userId === this.session!.uid && !s.endedAt);
+      if (active) {
+        await this.sessionRepo.markEnded(active.id, Date.now());
+      }
+
+      const channelId = this.session.channelId;
+      this.session = null;
+      this._emit('leave', channelId);
+    } catch (err) {
+      const wrapped = new RtcConnectionError(err instanceof Error ? err.message : 'Failed to leave channel');
+      this._emit('error', wrapped);
+      throw wrapped;
     }
-
-    const channelId = this.session.channelId;
-    this.session    = null;
-    this._emit('leave', channelId);
   }
-
-  // ── Destroy ────────────────────────────────────────────────────────────────
 
   async destroy(): Promise<void> {
-    await this.leave();
-    this.listeners.clear();
+    try {
+      await this.leave();
+    } catch {
+      // leave already emitted error
+    } finally {
+      this.listeners.clear();
+    }
   }
 
-  // ── Audio controls ─────────────────────────────────────────────────────────
-
   async setAudioMuted(muted: boolean): Promise<void> {
-    await this.room.localParticipant.setMicrophoneEnabled(!muted);
+    try {
+      await this.room.localParticipant.setMicrophoneEnabled(!muted);
+    } catch (err) {
+      throw new RtcConnectionError(err instanceof Error ? err.message : 'Failed to set audio mute');
+    }
   }
 
   async toggleAudioMute(): Promise<boolean> {
     const mic = this.room.localParticipant.isMicrophoneEnabled;
-    await this.room.localParticipant.setMicrophoneEnabled(!mic);
-    return !mic; // returns new muted state (true = now muted)
+    await this.setAudioMuted(mic);
+    return mic;
   }
 
   get isMuted(): boolean {
     return !this.room.localParticipant.isMicrophoneEnabled;
   }
 
-  // ── Video controls ─────────────────────────────────────────────────────────
-
   async setCameraEnabled(enabled: boolean): Promise<void> {
-    await this.room.localParticipant.setCameraEnabled(enabled);
+    try {
+      await this.room.localParticipant.setCameraEnabled(enabled);
+    } catch (err) {
+      throw new RtcConnectionError(err instanceof Error ? err.message : 'Failed to set camera');
+    }
   }
 
   async toggleCamera(): Promise<boolean> {
     const cam = this.room.localParticipant.isCameraEnabled;
-    await this.room.localParticipant.setCameraEnabled(!cam);
+    await this.setCameraEnabled(!cam);
     return !cam;
   }
 
@@ -183,21 +171,18 @@ export class RtcClient {
     return this.room.localParticipant.isCameraEnabled;
   }
 
-  // ── Participants ───────────────────────────────────────────────────────────
-
   get remoteParticipants(): RemoteParticipant[] {
     return Array.from(this.room.remoteParticipants.values());
   }
 
   get remoteUids(): string[] {
-    return this.remoteParticipants.map(p => p.identity);
+    return this.remoteParticipants.map((p) => p.identity);
   }
 
   get localParticipant(): LocalParticipant {
     return this.room.localParticipant;
   }
 
-  // Expose the raw Room for video rendering (VideoView needs it)
   get rawRoom(): Room {
     return this.room;
   }
@@ -209,8 +194,6 @@ export class RtcClient {
   get isConnected(): boolean {
     return this.room.state === ConnectionState.Connected;
   }
-
-  // ── Events ─────────────────────────────────────────────────────────────────
 
   on<K extends keyof RtcEventMap>(event: K, listener: RtcEventMap[K]): this {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set());
@@ -224,10 +207,8 @@ export class RtcClient {
   }
 
   private _emit(event: string, ...args: any[]) {
-    this.listeners.get(event)?.forEach(fn => fn(...args));
+    this.listeners.get(event)?.forEach((fn) => fn(...args));
   }
-
-  // ── Internal: bind LiveKit room events ────────────────────────────────────
 
   private _bindRoomEvents() {
     this.room.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
@@ -239,11 +220,14 @@ export class RtcClient {
     });
 
     this.room.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
-      this._emit('activeSpeakersChanged', speakers.map(s => s.identity));
+      this._emit('activeSpeakersChanged', speakers.map((s) => s.identity));
     });
 
     this.room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       this._emit('connectionStateChanged', state);
+      if (state === ConnectionState.Disconnected && this.session) {
+        this._emit('error', new RtcConnectionError('Room disconnected unexpectedly'));
+      }
     });
 
     this.room.on(RoomEvent.Disconnected, () => {
@@ -254,23 +238,26 @@ export class RtcClient {
     });
   }
 
-  // ── Internal: fetch LiveKit token from auth server ────────────────────────
-
   private async _fetchLiveKitToken(room: string, identity: string): Promise<{ token: string; url: string }> {
     const res = await fetch(`${this.config.authServerUrl}/sdk/livekit-token`, {
-      method:  'POST',
+      method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${this.config.sdkToken}`,
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.config.sdkToken}`,
       },
       body: JSON.stringify({ room, identity }),
     });
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `LiveKit token fetch failed: ${res.status}`);
+      throw new RtcTokenError(body.error || `LiveKit token fetch failed: ${res.status}`, res.status);
     }
 
-    return res.json();
+    const data = await res.json();
+    if (!data.token || !data.url) {
+      throw new RtcTokenError('Malformed LiveKit token response');
+    }
+
+    return data;
   }
 }

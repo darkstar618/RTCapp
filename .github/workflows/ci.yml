@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install auth server dependencies
+        run: npm ci
+        working-directory: server/auth
+
+      - name: Install API server dependencies
+        run: npm ci
+        working-directory: server/api
+
+      - name: Install SDK dependencies
+        run: npm ci
+        working-directory: packages/sdk
+
+      - name: Run SDK tests
+        run: npm test
+        working-directory: packages/sdk
+
+      - name: Run API utility tests
+        run: npm test
+        working-directory: server/api
+
+      - name: Verify server config fail-fast
+        env:
+          JWT_SECRET: test-secret
+          LIVEKIT_API_KEY: lk_key
+          LIVEKIT_API_SECRET: lk_secret
+          LIVEKIT_URL: wss://example.livekit.cloud
+        run: node -e "require('./server/auth/src/config'); console.log('auth ok')"
+
+      - name: Verify API config fail-fast
+        env:
+          JWT_SECRET: test-secret
+          SDK_SESSION_JWT_SECRET: session-secret
+          DEV_DASHBOARD_JWT_SECRET: test-secret
+          ADMIN_SECRET: admin-secret
+          LIVEKIT_API_KEY: lk_key
+          LIVEKIT_API_SECRET: lk_secret
+          LIVEKIT_URL: wss://example.livekit.cloud
+        run: node -e "require('./server/api/src/config'); console.log('api ok')"

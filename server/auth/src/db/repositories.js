@@ -16,9 +16,7 @@ const DeveloperRepo = {
   },
 
   async findByEmail(email) {
-    const row = await db('developers').where({ email }).select('*').first();
-    console.log('findByEmail result:', JSON.stringify(row));
-    return row;
+    return db('developers').where({ email }).select('id', 'email', 'name', 'password_hash', 'created_at', 'updated_at').first();
   },
 
   async findById(id) {
@@ -81,6 +79,14 @@ const RefreshTokenRepo = {
 
   async findAllActive(now) {
     return db('refresh_tokens').where({ revoked: 0 }).where('expires_at', '>', now).select('*');
+  },
+
+  async findActiveById(id, now) {
+    return db('refresh_tokens')
+      .where({ id, revoked: 0 })
+      .where('expires_at', '>', now)
+      .select('*')
+      .first();
   },
 
   async revoke(id) {

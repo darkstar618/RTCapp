@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const { v4: uuidv4 } = require('uuid');
+const { isBlockedWebhookUrl } = require('../utils/webhookUrl');
+const logger = require('../utils/logger');
 
 function sign(secret, payload) {
   return 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
@@ -18,7 +20,7 @@ function httpPost(url, body, headers) {
       port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
       path: parsed.pathname + parsed.search,
       headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
-      timeout: 5000
+      timeout: 5000,
     };
     const req = lib.request(options, (res) => resolve(res.statusCode));
     req.on('error', reject);
@@ -29,8 +31,17 @@ function httpPost(url, body, headers) {
 }
 
 async function deliver(deliveryId, endpoint, event, payload, attempt = 1) {
-  const body = JSON.stringify(payload);
-  const sig = sign(endpoint.secret, body);
+  if (isBlockedWebhookUrl(endpoint.url)) {
+    db.prepare('UPDATE webhook_deliveries SET status=?, attempts=?, last_attempt_at=?, response_status=? WHERE id=?')
+      .run('failed', attempt, Date.now(), null, deliveryId);
+    logger.warn({ endpointId: endpoint.id }, 'webhook delivery blocked for private URL');
+    return;
+  }
+
+  const timestamp = Date.now();
+  const envelope = { event, app_id: payload.app_id, timestamp, data: payload.data ?? payload };
+  const body = JSON.stringify(envelope);
+  const sig = sign(endpoint.secret, `${timestamp}.${body}`);
   let status = 'failed';
   let responseStatus = null;
   try {
@@ -40,22 +51,17 @@ async function deliver(deliveryId, endpoint, event, payload, attempt = 1) {
       'X-RTC-Event': event,
       'X-RTC-Delivery': deliveryId,
       'X-RTC-Attempt': String(attempt),
+      'X-RTC-Timestamp': String(timestamp),
     });
     status = responseStatus >= 200 && responseStatus < 300 ? 'delivered' : 'failed';
-    if (status === 'delivered') {
-      console.log('[webhook] delivered event=%s endpoint=%s attempt=%d status=%d', event, endpoint.id, attempt, responseStatus);
-    } else {
-      console.warn('[webhook] failed event=%s endpoint=%s attempt=%d status=%d', event, endpoint.id, attempt, responseStatus);
-    }
-  } catch(e) {
+  } catch (e) {
     status = 'failed';
-    console.warn('[webhook] error event=%s endpoint=%s attempt=%d error=%s', event, endpoint.id, attempt, e.message);
+    logger.warn({ err: e, event, endpointId: endpoint.id, attempt }, 'webhook delivery error');
   }
   db.prepare('UPDATE webhook_deliveries SET status=?, attempts=?, last_attempt_at=?, response_status=? WHERE id=?')
     .run(status, attempt, Date.now(), responseStatus, deliveryId);
   if (status === 'failed' && attempt < 3) {
     const delay = attempt * 2000;
-    console.log('[webhook] retrying in %dms attempt=%d', delay, attempt + 1);
     setTimeout(() => deliver(deliveryId, endpoint, event, payload, attempt + 1), delay);
   }
 }
@@ -69,7 +75,7 @@ function fire(appId, event, payload) {
     const deliveryId = uuidv4();
     db.prepare('INSERT INTO webhook_deliveries (id,endpoint_id,event,payload,status,attempts,created_at) VALUES (?,?,?,?,?,?,?)')
       .run(deliveryId, ep.id, event, JSON.stringify(payload), 'pending', 0, Date.now());
-    deliver(deliveryId, ep, event, { event, app_id: appId, timestamp: Date.now(), data: payload });
+    deliver(deliveryId, ep, event, { app_id: appId, data: payload });
   }
 }
 

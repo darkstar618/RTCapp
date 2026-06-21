@@ -1,5 +1,6 @@
-// packages/sdk/src/rtc/permissions.ts
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform } from 'react-native';
+import { PermissionsAndroid } from 'react-native';
+import { RtcPermissionError } from '../errors';
 
 export async function requestAudioPermissions(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
@@ -9,7 +10,7 @@ export async function requestAudioPermissions(): Promise<boolean> {
       PermissionsAndroid.PERMISSIONS.MODIFY_AUDIO_SETTINGS,
     ]);
     return (
-      granted[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO]          === 'granted' &&
+      granted[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] === 'granted' &&
       granted[PermissionsAndroid.PERMISSIONS.MODIFY_AUDIO_SETTINGS] === 'granted'
     );
   } catch {
@@ -17,9 +18,14 @@ export async function requestAudioPermissions(): Promise<boolean> {
   }
 }
 
+export async function requireAudioPermissions(): Promise<void> {
+  const ok = await requestAudioPermissions();
+  if (!ok) throw new RtcPermissionError('audio');
+}
+
 export async function checkAudioPermissions(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
-  const audio  = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+  const audio = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
   const modify = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.MODIFY_AUDIO_SETTINGS);
   return audio && modify;
 }

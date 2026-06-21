@@ -1,11 +1,11 @@
-// src/routes/sdkTokens.js
 const express = require('express');
-const bcrypt  = require('bcryptjs');
+const bcrypt = require('bcryptjs');
 const { ApiKeyRepo } = require('../db/repositories');
 const { issueTokenPair, rotateRefreshToken } = require('../auth/tokens');
+const logger = require('../utils/logger');
+
 const router = express.Router();
 
-// ── POST /sdk/token ───────────────────────────────────────────────────────────
 router.post('/token', async (req, res) => {
   const { app_id, app_secret } = req.body;
   if (!app_id || !app_secret) {
@@ -23,12 +23,11 @@ router.post('/token', async (req, res) => {
     const tokens = await issueTokenPair(apiKey);
     res.json(tokens);
   } catch (err) {
-    console.error('SDK token error:', err);
+    logger.error({ err }, 'sdk token error');
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// ── POST /sdk/refresh ─────────────────────────────────────────────────────────
 router.post('/refresh', async (req, res) => {
   const { refresh_token } = req.body;
   if (!refresh_token) {
@@ -44,7 +43,7 @@ router.post('/refresh', async (req, res) => {
     if (err.message === 'API key no longer active') {
       return res.status(401).json({ error: err.message, code: 'KEY_REVOKED' });
     }
-    console.error('SDK refresh error:', err);
+    logger.error({ err }, 'sdk refresh error');
     res.status(500).json({ error: 'Internal server error' });
   }
 });

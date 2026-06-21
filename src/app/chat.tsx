@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Room, RoomEvent, ConnectionState, RemoteParticipant } from 'livekit-client';
 import { AUTH_URL } from '../config';
+import { useRtcSession } from '../context/rtc-session';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -41,11 +42,10 @@ function msgId() {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
-  const { identity, contact, token } = useLocalSearchParams<{
-    identity: string;
-    contact: string;
-    token: string;
-  }>();
+  const { contact } = useLocalSearchParams<{ contact: string }>();
+  const { session } = useRtcSession();
+  const identity = session?.identity ?? '';
+  const token = session?.token ?? '';
   const router = useRouter();
 
   const roomRef = useRef<Room | null>(null);

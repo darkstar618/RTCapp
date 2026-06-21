@@ -5,9 +5,10 @@ import {
   AppState, AppStateStatus,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Room, RoomEvent, ConnectionState, RemoteParticipant } from 'livekit-client';
 import { AUTH_URL, RTC_URL } from '../config';
+import { useRtcSession } from '../context/rtc-session';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -33,11 +34,10 @@ function fmt(ts: number) {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function VoiceScreen() {
-  const { channel, identity, token } = useLocalSearchParams<{
-    channel: string;
-    identity: string;
-    token: string;
-  }>();
+  const { session } = useRtcSession();
+  const channel = session?.channel ?? '';
+  const identity = session?.identity ?? '';
+  const token = session?.token ?? '';
   const router = useRouter();
 
   const roomRef = useRef<Room | null>(null);
@@ -67,6 +67,12 @@ export default function VoiceScreen() {
   }, []);
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!session?.token) {
+      router.replace('/');
+    }
+  }, [session, router]);
+
   useEffect(() => {
     isMountedRef.current = true;
     cleanupCalledRef.current = false;

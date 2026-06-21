@@ -59,6 +59,7 @@ server/api/data/
 node_modules/
 
 debug.keystore
+*.keystore
 server/api/src/config.js
 server/auth/data/
 server/api/data/

@@ -2,50 +2,51 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { AUTH_URL, APP_ID, APP_SECRET } from '../config';
+import { AUTH_URL, APP_ID, DEMO_APP_SECRET, RTC_URL } from '../config';
+import { useRtcSession } from '../context/rtc-session';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { setSession } = useRtcSession();
   const [channel, setChannel] = useState('test-room');
-  const [identity, setIdentity] = useState('user-' + Math.floor(Math.random() * 1000));
+  const [identity, setIdentity] = useState(`user-${Math.floor(Math.random() * 1000)}`);
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function getToken() {
+    if (!APP_ID || !DEMO_APP_SECRET) {
+      Alert.alert(
+        'Demo credentials missing',
+        'Set EXPO_PUBLIC_APP_ID and EXPO_PUBLIC_DEMO_APP_SECRET in .env for local demo only.\n\nProduction apps must never embed app_secret — use a backend-for-frontend instead.'
+      );
+      return null;
+    }
+
     setLoading(true);
     try {
-      const r = await fetch(AUTH_URL + '/sdk/token', {
+      const r = await fetch(`${AUTH_URL}/sdk/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET })
+        body: JSON.stringify({ app_id: APP_ID, app_secret: DEMO_APP_SECRET }),
       });
-      if (!r.ok) throw new Error('Server returned ' + r.status);
+      if (!r.ok) throw new Error(`Server returned ${r.status}`);
       const data = await r.json();
       if (!data.access_token) throw new Error('No token in response');
       setToken(data.access_token);
       return data.access_token;
-    } catch(e: any) {
-      Alert.alert('Connection Error', e.message + '\n\nIs the auth server running at ' + AUTH_URL + '?');
+    } catch (e: any) {
+      Alert.alert('Connection Error', `${e.message}\n\nIs the auth server running at ${AUTH_URL}?`);
       return null;
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }
 
-  async function joinVoice() {
-    const t = token || await getToken();
+  async function navigateTo(path: '/voice' | '/video' | '/messages') {
+    const t = token || (await getToken());
     if (!t) return;
-    router.push('/voice?channel=' + encodeURIComponent(channel) + '&identity=' + encodeURIComponent(identity) + '&token=' + encodeURIComponent(t));
-  }
-
-  async function joinVideo() {
-    const t = token || await getToken();
-    if (!t) return;
-    router.push('/video?channel=' + encodeURIComponent(channel) + '&identity=' + encodeURIComponent(identity) + '&token=' + encodeURIComponent(t));
-  }
-
-  async function openMessages() {
-    const t = token || await getToken();
-    if (!t) return;
-    router.push('/messages?identity=' + encodeURIComponent(identity) + '&token=' + encodeURIComponent(t));
+    setSession({ token: t, identity, channel });
+    router.push(path);
   }
 
   return (
@@ -63,8 +64,8 @@ export default function HomeScreen() {
             value={channel}
             onChangeText={setChannel}
             placeholder="e.g. my-room"
-            placeholderTextColor='#555'
-            autoCapitalize='none'
+            placeholderTextColor="#555"
+            autoCapitalize="none"
           />
           <Text style={s.label}>Your Identity</Text>
           <TextInput
@@ -72,8 +73,8 @@ export default function HomeScreen() {
             value={identity}
             onChangeText={setIdentity}
             placeholder="e.g. john"
-            placeholderTextColor='#555'
-            autoCapitalize='none'
+            placeholderTextColor="#555"
+            autoCapitalize="none"
           />
         </View>
 
@@ -84,17 +85,17 @@ export default function HomeScreen() {
         {token ? <Text style={s.tokenHint}>Connected to {AUTH_URL}</Text> : null}
 
         <View style={s.row}>
-          <TouchableOpacity style={[s.joinBtn, s.voiceBtn, !token && s.joinDisabled]} onPress={joinVoice}>
+          <TouchableOpacity style={[s.joinBtn, s.voiceBtn, !token && s.joinDisabled]} onPress={() => navigateTo('/voice')}>
             <Text style={s.joinIcon}>🎙</Text>
             <Text style={s.joinText}>Voice Call</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[s.joinBtn, s.videoBtn, !token && s.joinDisabled]} onPress={joinVideo}>
+          <TouchableOpacity style={[s.joinBtn, s.videoBtn, !token && s.joinDisabled]} onPress={() => navigateTo('/video')}>
             <Text style={s.joinIcon}>📹</Text>
             <Text style={s.joinText}>Video Call</Text>
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={[s.msgBtn, !token && s.joinDisabled]} onPress={openMessages} disabled={!token}>
+        <TouchableOpacity style={[s.msgBtn, !token && s.joinDisabled]} onPress={() => navigateTo('/messages')} disabled={!token}>
           <Text style={s.msgIcon}>💬</Text>
           <Text style={s.msgText}>Direct Messages</Text>
         </TouchableOpacity>
@@ -102,7 +103,8 @@ export default function HomeScreen() {
         <View style={s.infoCard}>
           <Text style={s.infoTitle}>Platform Info</Text>
           <Text style={s.infoLine}>Auth: {AUTH_URL}</Text>
-          <Text style={s.infoLine}>App ID: {APP_ID.slice(0, 20)}...</Text>
+          <Text style={s.infoLine}>API: {RTC_URL}</Text>
+          <Text style={s.infoLine}>App ID: {APP_ID ? `${APP_ID.slice(0, 20)}...` : '(not set)'}</Text>
           <Text style={s.infoLine}>Status: {token ? '🟢 Authenticated' : '🔴 Not connected'}</Text>
         </View>
       </ScrollView>
